@@ -27,6 +27,8 @@ export default function AdminPage() {
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
   const [loadingPersonaDetail, setLoadingPersonaDetail] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createForm, setCreateForm] = useState({ id: '', name: '', description: '', systemPrompt: '', tone: '' });
 
   useEffect(() => {
     loadPersonas();
@@ -198,16 +200,44 @@ export default function AdminPage() {
   }
 
   async function createNewPersona() {
-    const id = prompt('请输入新人设 ID（英文，唯一）:');
-    if (!id) return;
+    setCreateForm({ id: '', name: '', description: '', systemPrompt: '', tone: '' });
+    setShowCreateModal(true);
+  }
 
-    const name = prompt('请输入人设名称:');
-    if (!name) return;
+  async function handleCreatePersona(e: React.FormEvent) {
+    e.preventDefault();
+    
+    if (!createForm.id || !createForm.name || !createForm.systemPrompt) {
+      showNotification('error', '请填写必填项（ID、名称、System Prompt）');
+      return;
+    }
 
-    setEditingPersona({ id, name, description: '', systemPrompt: '', tone: '' });
-    setIsNewPersona(true);
-    setEditForm({ name, description: '', systemPrompt: '', tone: '' });
-    setShowEditModal(true);
+    // 检查 ID 是否已存在
+    const exists = personas.some(p => p.id === createForm.id);
+    if (exists) {
+      showNotification('error', `人设 ID "${createForm.id}" 已存在，请使用其他 ID`);
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/admin', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createForm),
+      });
+
+      if (res.ok) {
+        showNotification('success', '人设创建成功！');
+        setShowCreateModal(false);
+        loadPersonas();
+      } else {
+        const data = await res.json();
+        showNotification('error', `创建失败: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Create error:', error);
+      showNotification('error', '创建失败');
+    }
   }
 
   if (loading) {
@@ -583,6 +613,85 @@ export default function AdminPage() {
                   className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl hover:from-blue-600 hover:to-indigo-600 transition-all font-medium shadow-lg shadow-blue-500/25"
                 >
                   保存
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+            <h2 className="text-xl font-semibold text-slate-800 mb-6 flex items-center gap-2">
+              <svg className="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+              新建人设
+            </h2>
+            <form onSubmit={handleCreatePersona} className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">ID</label>
+                <input
+                  type="text"
+                  value={createForm.id}
+                  onChange={(e) => setCreateForm({ ...createForm, id: e.target.value })}
+                  className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">名称</label>
+                  <input
+                    type="text"
+                    value={createForm.name}
+                    onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                    className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">语气</label>
+                  <input
+                    type="text"
+                    value={createForm.tone}
+                    onChange={(e) => setCreateForm({ ...createForm, tone: e.target.value })}
+                    className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">描述</label>
+                <input
+                  type="text"
+                  value={createForm.description}
+                  onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
+                  className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">System Prompt</label>
+                <textarea
+                  value={createForm.systemPrompt}
+                  onChange={(e) => setCreateForm({ ...createForm, systemPrompt: e.target.value })}
+                  className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 h-48 font-mono text-sm"
+                  required
+                />
+              </div>
+              <div className="flex gap-3 justify-end pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  className="px-6 py-3 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-all font-medium"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl hover:from-blue-600 hover:to-indigo-600 transition-all font-medium shadow-lg shadow-blue-500/25"
+                >
+                  创建
                 </button>
               </div>
             </form>

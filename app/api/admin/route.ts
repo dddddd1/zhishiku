@@ -25,13 +25,8 @@ async function saveCustomPersona(persona: Persona) {
 }
 
 async function getAllPersonasWithStats() {
-  const defaults = await getAllPersonas();
+  const allPersonas = await getAllPersonas();
   const custom = await getCustomPersonas();
-
-  const allPersonas: Persona[] = [
-    ...defaults,
-    ...Object.values(custom).filter(p => !DEFAULT_PERSONAS[p.id]),
-  ];
 
   // 优化: 并行获取文件列表,但不执行耗时的向量搜索
   const stats = await Promise.all(
@@ -72,12 +67,8 @@ export async function GET(request: NextRequest) {
     }
 
     // 简化: 只返回基本信息,不查询文件列表
-    const defaults = await getAllPersonas();
+    const allPersonas = await getAllPersonas();
     const custom = await getCustomPersonas();
-    const allPersonas: Persona[] = [
-      ...defaults,
-      ...Object.values(custom).filter(p => !DEFAULT_PERSONAS[p.id]),
-    ];
 
     const personas = allPersonas.map(p => ({
       ...p,
