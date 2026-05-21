@@ -3,7 +3,7 @@ import { ChatPromptTemplate, MessagesPlaceholder } from '@langchain/core/prompts
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter';
 import { formatDocumentsAsString } from 'langchain/util/document';
-import { kv } from '@vercel/kv';
+import { getRedis } from './redis';
 import type { Document } from '@langchain/core/documents';
 
 const MODEL_NAME = process.env.MODEL_NAME || 'gpt-4o-mini';
@@ -94,12 +94,14 @@ export async function createVectorStore(roleId: string, documents: Document[]) {
     });
   }
 
-  await kv.set(getVectorKey(roleId), JSON.stringify(vectors));
+  const redis = getRedis();
+  await redis.set(getVectorKey(roleId), JSON.stringify(vectors));
   return vectors;
 }
 
 export async function addToVectorStore(roleId: string, documents: Document[]) {
-  const existingData = await kv.get<string>(getVectorKey(roleId));
+  const redis = getRedis();
+  const existingData = await redis.get<string>(getVectorKey(roleId));
   const existingVectors: StoredVector[] = existingData ? JSON.parse(existingData) : [];
   const embeddings = getEmbeddings();
 
@@ -116,7 +118,7 @@ export async function addToVectorStore(roleId: string, documents: Document[]) {
   }
 
   const allVectors = [...existingVectors, ...newVectors];
-  await kv.set(getVectorKey(roleId), JSON.stringify(allVectors));
+  await redis.set(getVectorKey(roleId), JSON.stringify(allVectors));
   return allVectors;
 }
 
@@ -126,7 +128,8 @@ export async function similaritySearch(
   k: number = TOP_K
 ): Promise<Document[]> {
   try {
-    const data = await kv.get<string>(getVectorKey(roleId));
+    const redis = getRedis();
+    const data = await redis.get<string>(getVectorKey(roleId));
     if (!data) return [];
 
     const vectors: StoredVector[] = JSON.parse(data);
@@ -156,13 +159,15 @@ export async function saveChatHistory(
   chatId: string,
   messages: Array<{ type: 'human' | 'ai'; content: string }>
 ) {
-  await kv.set(getMemoryKey(chatId), JSON.stringify(messages));
+  const redis = getRedis();
+  await redis.set(getMemoryKey(chatId), JSON.stringify(messages));
 }
 
 export async function loadChatHistory(
   chatId: string
 ): Promise<Array<{ type: 'human' | 'ai'; content: string }>> {
-  const data = await kv.get<string>(getMemoryKey(chatId));
+  const redis = getRedis();
+  const data = await redis.get<string>(getMemoryKey(chatId));
   if (!data) return [];
   try {
     return JSON.parse(data);
@@ -225,17 +230,20 @@ export async function* streamRAGChain(
 }
 
 export async function clearRoleVectors(roleId: string) {
-  await kv.del(getVectorKey(roleId));
-  await kv.del(`files:${roleId}`);
+  const redis = getRedis();
+  await redis.del(getVectorKey(roleId));
+  await redis.del(`files:${roleId}`);
 }
 
 export async function getRoleFiles(roleId: string): Promise<string[]> {
-  return (await kv.get<string[]>(`files:${roleId}`)) || [];
+  const redis = getRedis();
+  return (await redis.get<string[]>(`files:${roleId}`)) || [];
 }
 
 export async function addRoleFile(roleId: string, fileUrl: string) {
+  const redis = getRedis();
   const files = await getRoleFiles(roleId);
   const newFiles = files.includes(fileUrl) ? files : [...files, fileUrl];
-  await kv.set(`files:${roleId}`, newFiles);
+  await redis.set(`files:${roleId}`, newFiles);
   return newFiles;
 }

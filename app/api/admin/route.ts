@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { DEFAULT_PERSONAS, getAllPersonas, getPersona, type Persona } from '@/lib/personas';
 import { clearRoleVectors, getRoleFiles, similaritySearch } from '@/lib/langchain';
-import { kv } from '@vercel/kv';
+import { getRedis } from '@/lib/redis';
 
 const KV_PERSONAS_KEY = 'personas:custom';
 
 async function getCustomPersonas(): Promise<Record<string, Persona>> {
-  const data = await kv.get<string>(KV_PERSONAS_KEY);
+  const redis = getRedis();
+  const data = await redis.get<string>(KV_PERSONAS_KEY);
   if (!data) return {};
   try {
     return JSON.parse(data);
@@ -16,9 +17,10 @@ async function getCustomPersonas(): Promise<Record<string, Persona>> {
 }
 
 async function saveCustomPersona(persona: Persona) {
+  const redis = getRedis();
   const custom = await getCustomPersonas();
   custom[persona.id] = persona;
-  await kv.set(KV_PERSONAS_KEY, JSON.stringify(custom));
+  await redis.set(KV_PERSONAS_KEY, JSON.stringify(custom));
 }
 
 async function getAllPersonasWithStats() {
