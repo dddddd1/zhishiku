@@ -32,7 +32,8 @@ export async function POST(request: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          const sourcesSent = new Set<string>();
+          let lastSources: Array<{ content: string; source: string; metadata?: Record<string, unknown> }> = [];
+          let lastResponse = '';
 
           for await (const result of streamRAGChain(
             roleId,
@@ -40,21 +41,12 @@ export async function POST(request: NextRequest) {
             message,
             chatHistory
           )) {
+            // 只发送内容
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify({ type: 'content', content: result.response })}\n\n`)
             );
-
-            if (result.sources.length > 0 && sourcesSent.size === 0) {
-              for (const source of result.sources) {
-                const key = `${source.source}-${source.content.substring(0, 50)}`;
-                if (!sourcesSent.has(key)) {
-                  sourcesSent.add(key);
-                }
-              }
-              controller.enqueue(
-                encoder.encode(`data: ${JSON.stringify({ type: 'sources', sources: result.sources })}\n\n`)
-              );
-            }
+            lastResponse = result.response;
+            lastSources = result.sources;
           }
 
           const updatedHistory = [
@@ -63,6 +55,13 @@ export async function POST(request: NextRequest) {
           ];
 
           await saveChatHistory(chatId, updatedHistory);
+
+          // 等回答结束后才发送参考来源
+          if (lastSources.length > 0) {
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ type: 'sources', sources: lastSources })}\n\n`)
+            );
+          }
 
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ type: 'done', chatId })}\n\n`)

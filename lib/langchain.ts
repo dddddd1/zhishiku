@@ -9,10 +9,10 @@ import type { Document } from '@langchain/core/documents';
 
 const MODEL_NAME = process.env.MODEL_NAME || 'gpt-4o-mini';
 const EMBEDDING_MODEL_NAME = process.env.EMBEDDING_MODEL_NAME || 'text-embedding-3-small';
-const CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE || '2000'); // 增加到2000字符
-const CHUNK_OVERLAP = parseInt(process.env.CHUNK_OVERLAP || '200'); // 增加重叠
-const TOP_K = parseInt(process.env.TOP_K || '3');
-const SIMILARITY_THRESHOLD = 0.2; // 降低阈值调低一些，让更多相关内容被召回
+const CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE || '800'); // 减小到800字符，让每块更精准
+const CHUNK_OVERLAP = parseInt(process.env.CHUNK_OVERLAP || '100'); // 减少重叠
+const TOP_K = parseInt(process.env.TOP_K || '5'); // 增加到5，获取更多候选
+const SIMILARITY_THRESHOLD = 0.35; // 进一步降低阈值，让更多相关内容被召回
 
 const VECTOR_DIM = 1536;
 
@@ -38,7 +38,7 @@ async function getZhipuEmbedding(text: string): Promise<number[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   const baseURL = process.env.OPENAI_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
   const model = EMBEDDING_MODEL_NAME;
-
+  console.log(`[ZhipuEmbedding] Using model: ${model}`, baseURL, apiKey);
   try {
     console.log(`[ZhipuEmbedding] Calling API for text length: ${text.length}`);
     
@@ -143,6 +143,28 @@ function cosineSimilarity(a: number[], b: number[]): number {
   
   // 确保返回值在合理范围内
   return Math.max(-1, Math.min(1, similarity));
+}
+
+// 关键词匹配分数计算
+function keywordMatchScore(query: string, content: string): number {
+  const queryWords = query.toLowerCase().split(/[\s\p{P}]+/u).filter(w => w.length > 1);
+  const contentLower = content.toLowerCase();
+  
+  if (queryWords.length === 0) return 0;
+  
+  let matchCount = 0;
+  for (const word of queryWords) {
+    if (contentLower.includes(word)) {
+      matchCount++;
+    }
+  }
+  
+  return matchCount / queryWords.length;
+}
+
+// 综合评分：向量相似度 + 关键词匹配
+function combinedScore(vectorScore: number, keywordScore: number): number {
+  return vectorScore * 0.85 + keywordScore * 0.15;
 }
 
 export async function createVectorStore(roleId: string, documents: Document[]) {
@@ -275,40 +297,55 @@ export async function similaritySearch(
     }
 
     const simStart = Date.now();
-    const scored = vectors.map((v) => ({
-      vector: v,
-      score: cosineSimilarity(queryEmbedding, v.embedding),
-    }));
+    
+    // 计算综合评分（向量相似度 + 关键词匹配）
+    const scored = vectors.map((v) => {
+      const vectorScore = cosineSimilarity(queryEmbedding, v.embedding);
+      const keywordScore = keywordMatchScore(query, v.content);
+      const finalScore = combinedScore(vectorScore, keywordScore);
+      return {
+        vector: v,
+        score: finalScore,
+        vectorScore,
+        keywordScore,
+      };
+    });
 
-    // 1. 按相似度排序
+    // 1. 按综合评分排序
     scored.sort((a, b) => b.score - a.score);
     
-    // 打印前10个结果的相似度，方便调试
-    console.log(`[Search] Top 10 similarity scores:`, scored.slice(0, 10).map(s => ({ score: s.score, source: s.vector.metadata?.source, content: s.vector.content.substring(0, 50) + '...' })));
+    // 打印前10个结果的评分详情，方便调试
+    console.log(`[Search] Top 10 scores:`, scored.slice(0, 10).map(s => ({ 
+      finalScore: s.score.toFixed(3), 
+      vectorScore: s.vectorScore.toFixed(3), 
+      keywordScore: s.keywordScore.toFixed(3),
+      source: s.vector.metadata?.source, 
+      content: s.vector.content.substring(0, 50) + '...' 
+    })));
     
     // 2. 过滤掉相似度太低的结果
     const filtered = scored.filter(s => s.score >= SIMILARITY_THRESHOLD);
     console.log(`[Search] Filtered to ${filtered.length} results above threshold ${SIMILARITY_THRESHOLD}`);
     
-    // 3. 按内容去重，保留相似度最高的那个（比按文件去重更准确
-    const seenContent = new Set<string>();
-    const deduplicated: typeof filtered = [];
-    
+    // 3. 先按文件分组，每个文件只保留得分最高的块
+    const fileBestMap = new Map<string, typeof filtered[0]>();
     for (const item of filtered) {
-      const content = item.vector.content.substring(0, 200);
-      const contentHash = `${item.vector.metadata?.source as string || 'unknown'}_${content}`;
-      if (!seenContent.has(contentHash)) {
-        seenContent.add(contentHash);
-        deduplicated.push(item);
+      const source = item.vector.metadata?.source as string || 'unknown';
+      if (!fileBestMap.has(source) || item.score > fileBestMap.get(source)!.score) {
+        fileBestMap.set(source, item);
       }
     }
     
-    console.log(`[Search] Deduplicated to ${deduplicated.length} unique content blocks`);
+    // 4. 去重后按文件得分排序
+    const deduplicated = Array.from(fileBestMap.values());
+    deduplicated.sort((a, b) => b.score - a.score);
     
-    // 4. 取前k个
+    console.log(`[Search] Deduplicated to ${deduplicated.length} files:`, deduplicated.map(s => s.vector.metadata?.source));
+    
+    // 5. 取前k个
     const topK = deduplicated.slice(0, k);
     const simTime = Date.now() - simStart;
-    console.log(`[Search] Similarity calculation completed in ${simTime}ms (${vectors.length} vectors)`);
+    console.log(`[Search] Calculation completed in ${simTime}ms (${vectors.length} vectors)`);
     console.log(`[Search] Final selected sources:`, topK.map(s => s.vector.metadata?.source));
     
     return topK.map((s) => ({
@@ -350,20 +387,23 @@ export function buildRAGPrompt(systemPrompt: string) {
     ['system', systemPrompt + `
 
 ====================
-【知识库内容】
-请严格基于以下知识库内容回答用户问题：
+【知识库内容 - 必须严格遵循】
 {context}
 ====================
 
-【回答要求】
-1. 必须优先使用知识库中的信息回答用户问题
-2. 如果知识库中有相关内容，应该直接引用知识库内容
-3. 不要编造知识库中没有的信息
-4. 如果知识库内容不足，可以补充合理的通用知识
-5. 回答要自然流畅，不要机械地复制粘贴
+【重要指令】
+1. 你必须严格按照上述知识库内容回答用户问题
+2. 如果知识库中有相关内容，必须引用知识库的具体内容来回答
+3. 绝对不要编造知识库中没有的信息
+4. 如果知识库内容与问题无关，请明确告知用户"当前知识库没有相关内容"
+5. 引用知识库内容时，可以引用具体段落或数据
+6. 回答要专业、准确、自然流畅
 
-【参考来源】
-在回答最后，可以提到参考的来源文件。`],
+【回答格式】
+建议按以下格式回答：
+- 先引用知识库中的相关内容和数据
+- 然后给出专业建议或结论
+- 最后注明参考来源`],
     new MessagesPlaceholder('history'),
     ['human', '{input}'],
   ]);
@@ -430,11 +470,29 @@ export async function* streamRAGChain(
   });
 
   let fullResponse = '';
-  const sources = docs.map((doc) => ({
-    content: doc.pageContent,
-    source: doc.metadata?.source as string || 'unknown',
-    metadata: doc.metadata,
-  }));
+  
+  // 按文件去重，每个文件只保留得分最高的内容
+  // 同时确保内容不重复（比较前100字符）
+  const sourceSeen = new Set<string>();
+  const sources: Array<{ content: string; source: string; metadata?: Record<string, unknown> }> = [];
+  
+  for (let i = 0; i < docs.length; i++) {
+    const doc = docs[i];
+    const source = doc.metadata?.source as string || 'unknown';
+    const contentPreview = doc.pageContent.substring(0, 100);
+    const key = `${source}_${contentPreview}`;
+    
+    if (!sourceSeen.has(key)) {
+      sourceSeen.add(key);
+      sources.push({
+        content: doc.pageContent,
+        source: source,
+        metadata: doc.metadata,
+      });
+    }
+  }
+
+  console.log(`[Chat] Found ${docs.length} docs, generating ${sources.length} unique sources`);
 
   console.log(`[Chat] Starting LLM streaming...`);
   const llmStart = Date.now();
@@ -442,6 +500,10 @@ export async function* streamRAGChain(
 
   for await (const chunk of stream) {
     fullResponse += chunk.content;
+    // 只在第一次yield时打印sources调试信息
+    if (fullResponse === chunk.content) {
+      console.log(`[Chat] First yield - sources:`, sources.length, sources.map(s => s.source));
+    }
     yield { response: fullResponse, sources };
   }
   
