@@ -30,7 +30,7 @@ function initializeRedis(): UpstashRedis | Redis {
       
       const redis = new IoRedis(process.env.REDIS_URL, {
         maxRetriesPerRequest: 3,
-        retryStrategy(times) {
+        retryStrategy(times: number) {
           const delay = Math.min(times * 50, 2000);
           return delay;
         },

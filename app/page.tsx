@@ -24,19 +24,24 @@ async function fetchPersonas(): Promise<Persona[]> {
   if (personasCache) return personasCache;
   
   if (!personasPromise) {
-    personasPromise = fetch('/api/admin')
-      .then(res => res.json())
-      .then(data => {
-        personasCache = data.personas || [];
-        return personasCache;
-      })
-      .catch(() => {
-        personasCache = [];
-        return personasCache;
-      });
+    const promise = (async (): Promise<Persona[]> => {
+      try {
+        const res = await fetch('/api/admin');
+        const data = await res.json();
+        const personas: Persona[] = data.personas || [];
+        personasCache = personas;
+        return personas;
+      } catch {
+        const empty: Persona[] = [];
+        personasCache = empty;
+        return empty;
+      }
+    })();
+    personasPromise = promise;
   }
   
-  return personasPromise;
+  const result = await personasPromise;
+  return result || [];
 }
 
 export default function Home() {

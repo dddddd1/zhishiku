@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { DEFAULT_PERSONAS, getAllPersonas, getPersona, type Persona } from '@/lib/personas';
-import { clearRoleVectors, getRoleFiles, similaritySearch } from '@/lib/langchain';
+import { clearRoleVectors, getRoleFiles, removeRoleFile } from '@/lib/langchain';
+import { del } from '@vercel/blob';
 import { getRedis } from '@/lib/redis';
 
 const KV_PERSONAS_KEY = 'personas:custom';
 
 async function getCustomPersonas(): Promise<Record<string, Persona>> {
   const redis = getRedis();
-  const data = await redis.get<string>(KV_PERSONAS_KEY);
+  const data = await (redis as any).get(KV_PERSONAS_KEY);
   if (!data) return {};
   try {
     return JSON.parse(data);
@@ -118,11 +119,19 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const roleId = searchParams.get('roleId');
-    const clearVectors = searchParams.get('clearVectors') !== 'false';
+    const fileUrl = searchParams.get('fileUrl');
 
     if (!roleId) {
       return NextResponse.json({ error: 'roleId is required' }, { status: 400 });
     }
+
+    if (fileUrl) {
+      await del(fileUrl);
+      await removeRoleFile(roleId, fileUrl);
+      return NextResponse.json({ success: true, roleId, fileUrl, deleted: 'file' });
+    }
+
+    const clearVectors = searchParams.get('clearVectors') !== 'false';
 
     if (clearVectors) {
       await clearRoleVectors(roleId);

@@ -24,6 +24,7 @@ export default function AdminPage() {
   const [editForm, setEditForm] = useState({ name: '', description: '', systemPrompt: '', tone: '' });
   const [showEditModal, setShowEditModal] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [deletingFile, setDeletingFile] = useState<string | null>(null);
 
   useEffect(() => {
     loadPersonas();
@@ -85,6 +86,30 @@ export default function AdminPage() {
       showNotification('error', '上传失败');
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleDeleteFile(fileUrl: string) {
+    if (!selectedPersonaId) return;
+
+    setDeletingFile(fileUrl);
+    try {
+      const res = await fetch(`/api/admin?roleId=${selectedPersonaId}&fileUrl=${encodeURIComponent(fileUrl)}`, {
+        method: 'DELETE',
+      });
+
+      if (res.ok) {
+        showNotification('success', '文件已删除');
+        loadPersonas();
+      } else {
+        const data = await res.json();
+        showNotification('error', `删除失败: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Delete error:', error);
+      showNotification('error', '删除失败');
+    } finally {
+      setDeletingFile(null);
     }
   }
 
@@ -326,19 +351,43 @@ export default function AdminPage() {
                   </div>
 
                   {selectedPersona.files && selectedPersona.files.length > 0 && (
-                    <div className="mb-6">
-                      <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="mb-6 bg-white rounded-xl border border-slate-200 overflow-hidden">
+                      <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+                        <svg className="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
-                        已上传文件
-                      </h3>
-                      <div className="flex flex-wrap gap-2">
-                        {selectedPersona.files.map((f, i) => (
-                          <span key={i} className="px-3 py-2 bg-slate-50 rounded-lg text-sm text-slate-600 border border-slate-200">
-                            {f.split('/').pop()}
-                          </span>
-                        ))}
+                        <span className="text-sm font-medium text-slate-700">已上传文件 ({selectedPersona.files.length})</span>
+                      </div>
+                      <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                        {Array.isArray(selectedPersona.files) ? selectedPersona.files.map((f: string, i: number) => (
+                          <div key={i} className="px-4 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors group">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <svg className="w-5 h-5 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                              </svg>
+                              <span className="text-sm text-slate-700 truncate" title={decodeURIComponent(f)}>
+                                {decodeURIComponent(f.split('/').pop() || f)}
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => handleDeleteFile(f)}
+                              disabled={deletingFile === f}
+                              className="ml-4 p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all disabled:opacity-50 opacity-0 group-hover:opacity-100"
+                              title="删除文件"
+                            >
+                              {deletingFile === f ? (
+                                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                              ) : (
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              )}
+                            </button>
+                          </div>
+                        )) : null}
                       </div>
                     </div>
                   )}
@@ -372,7 +421,7 @@ export default function AdminPage() {
                       <div className="relative">
                         <input
                           type="file"
-                          accept=".pdf,.md,.txt"
+                          accept=".pdf,.md,.txt,.xlsx,.xls,.docx,.doc"
                           onChange={(e) => setFile(e.target.files?.[0] || null)}
                           className="hidden"
                           id="file-upload"

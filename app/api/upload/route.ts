@@ -18,11 +18,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const validExtensions = ['.pdf', '.md', '.txt'];
+    const validExtensions = ['.pdf', '.md', '.txt', '.xlsx', '.xls', '.docx', '.doc'];
     const ext = '.' + file.name.split('.').pop()?.toLowerCase();
     if (!validExtensions.includes(ext)) {
       return NextResponse.json(
-        { error: 'Unsupported file type. Use PDF, MD, or TXT' },
+        { error: 'Unsupported file type. Use PDF, MD, TXT, XLSX, XLS, DOCX, or DOC' },
         { status: 400 }
       );
     }
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     const blob = await put(file.name, buffer, {
-      access: 'public',
+      access: 'private',
     });
 
     const documents = await parseDocument(file.name, buffer);

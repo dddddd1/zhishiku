@@ -101,8 +101,8 @@ export async function createVectorStore(roleId: string, documents: Document[]) {
 }
 
 export async function addToVectorStore(roleId: string, documents: Document[]) {
-  const redis = getRedis();
-  const existingData = await redis.get<string>(getVectorKey(roleId));
+  const redis = getRedis() as any;
+  const existingData = await redis.get(getVectorKey(roleId)) as string | null;
   const existingVectors: StoredVector[] = existingData ? JSON.parse(existingData) : [];
   const embeddings = getEmbeddings();
 
@@ -133,10 +133,10 @@ export async function similaritySearch(
 ): Promise<Document[]> {
   try {
     console.log(`[Search] Starting search for roleId: ${roleId}`);
-    const redis = getRedis();
+    const redis = getRedis() as any;
     
     const redisStart = Date.now();
-    const data = await redis.get<string>(getVectorKey(roleId));
+    const data = await redis.get(getVectorKey(roleId)) as string | null;
     const redisTime = Date.now() - redisStart;
     console.log(`[Search] Redis query completed in ${redisTime}ms`);
     
@@ -206,15 +206,15 @@ export async function saveChatHistory(
   chatId: string,
   messages: Array<{ type: 'human' | 'ai'; content: string }>
 ) {
-  const redis = getRedis();
+  const redis = getRedis() as any;
   await redis.set(getMemoryKey(chatId), JSON.stringify(messages));
 }
 
 export async function loadChatHistory(
   chatId: string
 ): Promise<Array<{ type: 'human' | 'ai'; content: string }>> {
-  const redis = getRedis();
-  const data = await redis.get<string>(getMemoryKey(chatId));
+  const redis = getRedis() as any;
+  const data = await redis.get(getMemoryKey(chatId)) as string | null;
   if (!data) return [];
   try {
     return JSON.parse(data);
@@ -298,14 +298,30 @@ export async function clearRoleVectors(roleId: string) {
 }
 
 export async function getRoleFiles(roleId: string): Promise<string[]> {
-  const redis = getRedis();
-  return (await redis.get<string[]>(`files:${roleId}`)) || [];
+  const redis = getRedis() as any;
+  const data = await redis.get(`files:${roleId}`);
+  if (!data) return [];
+  try {
+    const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function addRoleFile(roleId: string, fileUrl: string) {
-  const redis = getRedis();
+  const redis = getRedis() as any;
   const files = await getRoleFiles(roleId);
-  const newFiles = files.includes(fileUrl) ? files : [...files, fileUrl];
-  await redis.set(`files:${roleId}`, newFiles);
+  if (files.includes(fileUrl)) return files;
+  const newFiles = [...files, fileUrl];
+  await redis.set(`files:${roleId}`, JSON.stringify(newFiles));
+  return newFiles;
+}
+
+export async function removeRoleFile(roleId: string, fileUrl: string) {
+  const redis = getRedis() as any;
+  const files = await getRoleFiles(roleId);
+  const newFiles = files.filter(f => f !== fileUrl);
+  await redis.set(`files:${roleId}`, JSON.stringify(newFiles));
   return newFiles;
 }

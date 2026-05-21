@@ -71,9 +71,9 @@ export const DEFAULT_PERSONAS: Record<string, Persona> = {
 const KV_PERSONAS_KEY = 'personas:custom';
 
 async function getCustomPersonas(): Promise<Record<string, Persona>> {
-  const redis = getRedis();
+  const redis = getRedis() as any;
   try {
-    const data = await redis.get<string>(KV_PERSONAS_KEY);
+    const data = await redis.get(KV_PERSONAS_KEY) as string | null;
     if (!data) return {};
     return JSON.parse(data);
   } catch {
