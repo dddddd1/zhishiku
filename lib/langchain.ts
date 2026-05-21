@@ -1,3 +1,4 @@
+import 'server-only';
 import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
 import { ChatPromptTemplate, MessagesPlaceholder } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
@@ -122,22 +123,61 @@ export async function addToVectorStore(roleId: string, documents: Document[]) {
   return allVectors;
 }
 
+// 简单的 embedding 缓存
+const embeddingCache = new Map<string, number[]>();
+
 export async function similaritySearch(
   roleId: string,
   query: string,
   k: number = TOP_K
 ): Promise<Document[]> {
   try {
+    console.log(`[Search] Starting search for roleId: ${roleId}`);
     const redis = getRedis();
+    
+    const redisStart = Date.now();
     const data = await redis.get<string>(getVectorKey(roleId));
-    if (!data) return [];
+    const redisTime = Date.now() - redisStart;
+    console.log(`[Search] Redis query completed in ${redisTime}ms`);
+    
+    if (!data) {
+      console.log(`[Search] No data found for roleId: ${roleId}`);
+      return [];
+    }
 
+    const parseStart = Date.now();
     const vectors: StoredVector[] = JSON.parse(data);
+    const parseTime = Date.now() - parseStart;
+    console.log(`[Search] JSON parse completed in ${parseTime}ms, found ${vectors.length} vectors`);
+    
     if (vectors.length === 0) return [];
 
     const embeddings = getEmbeddings();
-    const queryEmbedding = await embeddings.embedQuery(query);
+    
+    // 检查缓存
+    const cacheKey = `${roleId}:${query}`;
+    let queryEmbedding: number[];
+    
+    if (embeddingCache.has(cacheKey)) {
+      queryEmbedding = embeddingCache.get(cacheKey)!;
+      console.log(`[Search] Using cached embedding for query`);
+    } else {
+      const embedStart = Date.now();
+      queryEmbedding = await embeddings.embedQuery(query);
+      const embedTime = Date.now() - embedStart;
+      console.log(`[Search] Embedding computed in ${embedTime}ms`);
+      
+      // 缓存 (限制缓存大小)
+      if (embeddingCache.size > 100) {
+        const firstKey = embeddingCache.keys().next().value;
+        if (firstKey) {
+          embeddingCache.delete(firstKey);
+        }
+      }
+      embeddingCache.set(cacheKey, queryEmbedding);
+    }
 
+    const simStart = Date.now();
     const scored = vectors.map((v) => ({
       vector: v,
       score: cosineSimilarity(queryEmbedding, v.embedding),
@@ -146,11 +186,18 @@ export async function similaritySearch(
     scored.sort((a, b) => b.score - a.score);
 
     const topK = scored.slice(0, k);
+    const simTime = Date.now() - simStart;
+    console.log(`[Search] Similarity calculation completed in ${simTime}ms (${vectors.length} vectors)`);
+    
     return topK.map((s) => ({
       pageContent: s.vector.content,
       metadata: s.vector.metadata,
     })) as Document[];
-  } catch {
+  } catch (error) {
+    console.error('[Search] Error occurred:', error);
+    if (error instanceof Error) {
+      console.error('[Search] Error stack:', error.stack);
+    }
     return [];
   }
 }
@@ -199,8 +246,17 @@ export async function* streamRAGChain(
   input: string,
   chatHistory: Array<{ type: 'human' | 'ai'; content: string }>
 ): AsyncGenerator<RAGResult, void, unknown> {
+  const startTime = Date.now();
+  console.log(`[Chat] Starting RAG chain for roleId: ${roleId}`);
+  
   const llm = getChatModel();
+  
+  // 测量向量搜索耗时
+  const searchStart = Date.now();
   const docs = await similaritySearch(roleId, input, TOP_K);
+  const searchTime = Date.now() - searchStart;
+  console.log(`[Chat] Vector search completed in ${searchTime}ms, found ${docs.length} documents`);
+  
   const context = formatDocumentsAsString(docs);
 
   const prompt = buildRAGPrompt(systemPrompt);
@@ -221,12 +277,18 @@ export async function* streamRAGChain(
     metadata: doc.metadata,
   }));
 
+  console.log(`[Chat] Starting LLM streaming...`);
+  const llmStart = Date.now();
   const stream = await llm.stream(messages);
 
   for await (const chunk of stream) {
     fullResponse += chunk.content;
     yield { response: fullResponse, sources };
   }
+  
+  const totalTime = Date.now() - startTime;
+  const llmTime = Date.now() - llmStart;
+  console.log(`[Chat] Completed - Total: ${totalTime}ms, Search: ${searchTime}ms, LLM: ${llmTime}ms`);
 }
 
 export async function clearRoleVectors(roleId: string) {

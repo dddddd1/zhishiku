@@ -6,8 +6,6 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substring(2, 10);
 }
 
-export const runtime = 'edge';
-
 export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
 
@@ -72,11 +70,13 @@ export async function POST(request: NextRequest) {
 
           controller.close();
         } catch (error) {
+          console.error('[Chat] Stream error:', error);
           controller.enqueue(
             encoder.encode(
               `data: ${JSON.stringify({
                 type: 'error',
                 error: error instanceof Error ? error.message : 'Stream error',
+                stack: error instanceof Error ? error.stack : undefined,
               })}\n\n`
             )
           );

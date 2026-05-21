@@ -16,6 +16,29 @@ interface Persona {
   tone: string;
 }
 
+// 全局缓存,避免重复请求
+let personasCache: Persona[] | null = null;
+let personasPromise: Promise<Persona[]> | null = null;
+
+async function fetchPersonas(): Promise<Persona[]> {
+  if (personasCache) return personasCache;
+  
+  if (!personasPromise) {
+    personasPromise = fetch('/api/admin')
+      .then(res => res.json())
+      .then(data => {
+        personasCache = data.personas || [];
+        return personasCache;
+      })
+      .catch(() => {
+        personasCache = [];
+        return personasCache;
+      });
+  }
+  
+  return personasPromise;
+}
+
 export default function Home() {
   const [selectedRole, setSelectedRole] = useState('sales-assistant');
   const [chatId, setChatId] = useState<string | null>(null);
@@ -26,14 +49,7 @@ export default function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch('/api/admin')
-      .then(res => res.json())
-      .then(data => {
-        setPersonas(data.personas || []);
-      })
-      .catch(() => {
-        setPersonas([]);
-      });
+    fetchPersonas().then(setPersonas);
   }, []);
 
   useEffect(() => {

@@ -1,3 +1,4 @@
+import 'server-only';
 import { getRedis } from './redis';
 
 export interface Persona {
