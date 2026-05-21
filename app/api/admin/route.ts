@@ -71,8 +71,22 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const stats = await getAllPersonasWithStats();
-    return NextResponse.json({ personas: stats });
+    // 简化: 只返回基本信息,不查询文件列表
+    const defaults = await getAllPersonas();
+    const custom = await getCustomPersonas();
+    const allPersonas: Persona[] = [
+      ...defaults,
+      ...Object.values(custom).filter(p => !DEFAULT_PERSONAS[p.id]),
+    ];
+
+    const personas = allPersonas.map(p => ({
+      ...p,
+      filesCount: 0, // 不实时查询
+      files: [], // 不返回文件列表
+      isCustom: !!custom[p.id],
+    }));
+
+    return NextResponse.json({ personas });
   } catch (error) {
     console.error('Admin GET error:', error);
     return NextResponse.json({ error: 'Failed to get data' }, { status: 500 });

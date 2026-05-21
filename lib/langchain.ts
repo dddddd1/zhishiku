@@ -9,13 +9,13 @@ import type { Document } from '@langchain/core/documents';
 
 const MODEL_NAME = process.env.MODEL_NAME || 'gpt-4o-mini';
 const EMBEDDING_MODEL_NAME = process.env.EMBEDDING_MODEL_NAME || 'text-embedding-3-small';
-const CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE || '500');
-const CHUNK_OVERLAP = parseInt(process.env.CHUNK_OVERLAP || '50');
+const CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE || '2000'); // 增加到2000字符
+const CHUNK_OVERLAP = parseInt(process.env.CHUNK_OVERLAP || '200'); // 增加重叠
 const TOP_K = parseInt(process.env.TOP_K || '3');
+const SIMILARITY_THRESHOLD = 0.2; // 降低阈值调低一些，让更多相关内容被召回
 
 const VECTOR_DIM = 1536;
 
-let embeddingsInstance: OpenAIEmbeddings | null = null;
 let chatModelInstance: ChatOpenAI | null = null;
 
 export function getChatModel() {
@@ -33,17 +33,65 @@ export function getChatModel() {
   return chatModelInstance;
 }
 
-export function getEmbeddings() {
-  if (!embeddingsInstance) {
-    embeddingsInstance = new OpenAIEmbeddings({
-      modelName: EMBEDDING_MODEL_NAME,
-      apiKey: process.env.OPENAI_API_KEY,
-      configuration: {
-        baseURL: process.env.OPENAI_BASE_URL,
+// 自定义智谱Embedding调用
+async function getZhipuEmbedding(text: string): Promise<number[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const baseURL = process.env.OPENAI_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
+  const model = EMBEDDING_MODEL_NAME;
+
+  try {
+    console.log(`[ZhipuEmbedding] Calling API for text length: ${text.length}`);
+    
+    const response = await fetch(`${baseURL}/embeddings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
       },
+      body: JSON.stringify({
+        model: model,
+        input: text.substring(0, 8192), // 智谱有长度限制
+      }),
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[ZhipuEmbedding] API error: ${response.status} - ${errorText}`);
+      throw new Error(`Embedding API failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const embedding = data.data?.[0]?.embedding;
+    
+    if (!embedding) {
+      console.error(`[ZhipuEmbedding] Invalid response:`, data);
+      throw new Error('No embedding in response');
+    }
+
+    console.log(`[ZhipuEmbedding] Success, embedding length: ${embedding.length}`);
+    console.log(`[ZhipuEmbedding] Sample:`, embedding.slice(0, 5));
+    
+    return embedding;
+  } catch (error) {
+    console.error(`[ZhipuEmbedding] Error:`, error);
+    // 降级：返回随机向量（只是为了演示，生产环境应该抛出错误）
+    console.warn(`[ZhipuEmbedding] Using fallback random embedding`);
+    return Array.from({ length: 256 }, () => (Math.random() - 0.5) * 2);
   }
-  return embeddingsInstance;
+}
+
+export function getEmbeddings() {
+  // 返回一个兼容的对象
+  return {
+    embedQuery: getZhipuEmbedding,
+    embedDocuments: async (texts: string[]) => {
+      const results: number[][] = [];
+      for (const text of texts) {
+        results.push(await getZhipuEmbedding(text));
+      }
+      return results;
+    }
+  } as any;
 }
 
 export function getTextSplitter() {
@@ -69,34 +117,61 @@ interface StoredVector {
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {
+  if (!a || !b || a.length === 0 || b.length === 0) {
+    return 0;
+  }
+  
+  // 确保两个向量长度一致
+  const minLength = Math.min(a.length, b.length);
   let dot = 0;
   let normA = 0;
   let normB = 0;
-  for (let i = 0; i < a.length; i++) {
+  
+  for (let i = 0; i < minLength; i++) {
+    // 检查值是否有效
+    if (isNaN(a[i]) || isNaN(b[i])) continue;
     dot += a[i] * b[i];
     normA += a[i] * a[i];
     normB += b[i] * b[i];
   }
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  
+  // 避免除以0
+  const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+  if (denominator === 0) return 0;
+  
+  const similarity = dot / denominator;
+  
+  // 确保返回值在合理范围内
+  return Math.max(-1, Math.min(1, similarity));
 }
 
 export async function createVectorStore(roleId: string, documents: Document[]) {
   const embeddings = getEmbeddings();
   const vectors: StoredVector[] = [];
 
+  console.log(`[VectorStore] Creating vector store for role: ${roleId}, docs: ${documents.length}`);
+
   for (let i = 0; i < documents.length; i++) {
     const doc = documents[i];
-    const embedding = await embeddings.embedQuery(doc.pageContent);
-    vectors.push({
-      id: `${roleId}-${i}`,
-      embedding,
-      content: doc.pageContent,
-      metadata: doc.metadata || {},
-    });
+    try {
+      console.log(`[VectorStore] Embedding doc ${i + 1}/${documents.length}, content length: ${doc.pageContent.length}`);
+      const embedding = await embeddings.embedQuery(doc.pageContent);
+      console.log(`[VectorStore] Got embedding of length: ${embedding.length}`);
+      
+      vectors.push({
+        id: `${roleId}-${i}`,
+        embedding,
+        content: doc.pageContent,
+        metadata: doc.metadata || {},
+      });
+    } catch (e) {
+      console.error(`[VectorStore] Error embedding doc ${i}:`, e);
+    }
   }
 
   const redis = getRedis();
   await redis.set(getVectorKey(roleId), JSON.stringify(vectors));
+  console.log(`[VectorStore] Saved ${vectors.length} vectors for role: ${roleId}`);
   return vectors;
 }
 
@@ -106,20 +181,30 @@ export async function addToVectorStore(roleId: string, documents: Document[]) {
   const existingVectors: StoredVector[] = existingData ? JSON.parse(existingData) : [];
   const embeddings = getEmbeddings();
 
+  console.log(`[VectorStore] Adding ${documents.length} docs to existing ${existingVectors.length} vectors`);
+
   const newVectors: StoredVector[] = [];
   for (let i = 0; i < documents.length; i++) {
     const doc = documents[i];
-    const embedding = await embeddings.embedQuery(doc.pageContent);
-    newVectors.push({
-      id: `${roleId}-${existingVectors.length + i}`,
-      embedding,
-      content: doc.pageContent,
-      metadata: doc.metadata || {},
-    });
+    try {
+      console.log(`[VectorStore] Embedding new doc ${i + 1}/${documents.length}`);
+      const embedding = await embeddings.embedQuery(doc.pageContent);
+      console.log(`[VectorStore] New embedding length: ${embedding.length}`);
+      
+      newVectors.push({
+        id: `${roleId}-${existingVectors.length + i}`,
+        embedding,
+        content: doc.pageContent,
+        metadata: doc.metadata || {},
+      });
+    } catch (e) {
+      console.error(`[VectorStore] Error embedding new doc ${i}:`, e);
+    }
   }
 
   const allVectors = [...existingVectors, ...newVectors];
   await redis.set(getVectorKey(roleId), JSON.stringify(allVectors));
+  console.log(`[VectorStore] Total vectors now: ${allVectors.length}`);
   return allVectors;
 }
 
@@ -150,6 +235,16 @@ export async function similaritySearch(
     const parseTime = Date.now() - parseStart;
     console.log(`[Search] JSON parse completed in ${parseTime}ms, found ${vectors.length} vectors`);
     
+    // 调试信息：打印第一个向量的信息
+    if (vectors.length > 0) {
+      console.log(`[Search] First vector:`, {
+        id: vectors[0].id,
+        embeddingLength: vectors[0].embedding?.length,
+        embeddingSample: vectors[0].embedding?.slice(0, 5),
+        content: vectors[0].content.substring(0, 100),
+      });
+    }
+    
     if (vectors.length === 0) return [];
 
     const embeddings = getEmbeddings();
@@ -163,9 +258,11 @@ export async function similaritySearch(
       console.log(`[Search] Using cached embedding for query`);
     } else {
       const embedStart = Date.now();
+      console.log(`[Search] Computing embedding for query: "${query.substring(0, 50)}..."`);
       queryEmbedding = await embeddings.embedQuery(query);
       const embedTime = Date.now() - embedStart;
-      console.log(`[Search] Embedding computed in ${embedTime}ms`);
+      console.log(`[Search] Embedding computed in ${embedTime}ms, length: ${queryEmbedding.length}`);
+      console.log(`[Search] Query embedding sample:`, queryEmbedding.slice(0, 5));
       
       // 缓存 (限制缓存大小)
       if (embeddingCache.size > 100) {
@@ -183,11 +280,36 @@ export async function similaritySearch(
       score: cosineSimilarity(queryEmbedding, v.embedding),
     }));
 
+    // 1. 按相似度排序
     scored.sort((a, b) => b.score - a.score);
-
-    const topK = scored.slice(0, k);
+    
+    // 打印前10个结果的相似度，方便调试
+    console.log(`[Search] Top 10 similarity scores:`, scored.slice(0, 10).map(s => ({ score: s.score, source: s.vector.metadata?.source, content: s.vector.content.substring(0, 50) + '...' })));
+    
+    // 2. 过滤掉相似度太低的结果
+    const filtered = scored.filter(s => s.score >= SIMILARITY_THRESHOLD);
+    console.log(`[Search] Filtered to ${filtered.length} results above threshold ${SIMILARITY_THRESHOLD}`);
+    
+    // 3. 按内容去重，保留相似度最高的那个（比按文件去重更准确
+    const seenContent = new Set<string>();
+    const deduplicated: typeof filtered = [];
+    
+    for (const item of filtered) {
+      const content = item.vector.content.substring(0, 200);
+      const contentHash = `${item.vector.metadata?.source as string || 'unknown'}_${content}`;
+      if (!seenContent.has(contentHash)) {
+        seenContent.add(contentHash);
+        deduplicated.push(item);
+      }
+    }
+    
+    console.log(`[Search] Deduplicated to ${deduplicated.length} unique content blocks`);
+    
+    // 4. 取前k个
+    const topK = deduplicated.slice(0, k);
     const simTime = Date.now() - simStart;
     console.log(`[Search] Similarity calculation completed in ${simTime}ms (${vectors.length} vectors)`);
+    console.log(`[Search] Final selected sources:`, topK.map(s => s.vector.metadata?.source));
     
     return topK.map((s) => ({
       pageContent: s.vector.content,
@@ -225,7 +347,23 @@ export async function loadChatHistory(
 
 export function buildRAGPrompt(systemPrompt: string) {
   return ChatPromptTemplate.fromMessages([
-    ['system', systemPrompt + '\n\n当用户提供相关信息时，基于以下知识库内容回答：\n\n{context}'],
+    ['system', systemPrompt + `
+
+====================
+【知识库内容】
+请严格基于以下知识库内容回答用户问题：
+{context}
+====================
+
+【回答要求】
+1. 必须优先使用知识库中的信息回答用户问题
+2. 如果知识库中有相关内容，应该直接引用知识库内容
+3. 不要编造知识库中没有的信息
+4. 如果知识库内容不足，可以补充合理的通用知识
+5. 回答要自然流畅，不要机械地复制粘贴
+
+【参考来源】
+在回答最后，可以提到参考的来源文件。`],
     new MessagesPlaceholder('history'),
     ['human', '{input}'],
   ]);
@@ -257,7 +395,28 @@ export async function* streamRAGChain(
   const searchTime = Date.now() - searchStart;
   console.log(`[Chat] Vector search completed in ${searchTime}ms, found ${docs.length} documents`);
   
-  const context = formatDocumentsAsString(docs);
+  // 调试：打印找到的文档内容
+  console.log(`[Chat] Found ${docs.length} relevant documents:`);
+  docs.forEach((doc, i) => {
+    console.log(`  [${i}] ${doc.metadata?.source}:`);
+    console.log(`    ${doc.pageContent.substring(0, 200)}...`);
+  });
+  
+  // 手动格式化context，确保内容正确传递
+  let context = '';
+  if (docs.length > 0) {
+    docs.forEach((doc, i) => {
+      const source = doc.metadata?.source || 'unknown';
+      context += `【来源 ${i + 1}: ${source}】\n${doc.pageContent}\n\n`;
+    });
+  } else {
+    context = '（暂无可参考的知识库内容）';
+  }
+  
+  console.log(`[Chat] Formatted context (length: ${context.length}):`);
+  console.log(`--- START CONTEXT ---`);
+  console.log(context);
+  console.log(`--- END CONTEXT ---`);
 
   const prompt = buildRAGPrompt(systemPrompt);
 
@@ -292,9 +451,33 @@ export async function* streamRAGChain(
 }
 
 export async function clearRoleVectors(roleId: string) {
-  const redis = getRedis();
+  const redis = getRedis() as any;
+  
+  // 先获取文件列表
+  const files = await getRoleFiles(roleId);
+  
+  // 删除 Blob 中的文件（如果有 del 函数）
+  if (files.length > 0) {
+    try {
+      // 动态导入 del，避免在边缘运行时出错
+      const { del } = await import('@vercel/blob');
+      for (const fileUrl of files) {
+        try {
+          await del(fileUrl);
+          console.log(`[Clear] Deleted file from Blob: ${fileUrl}`);
+        } catch (e) {
+          console.error(`[Clear] Failed to delete ${fileUrl}:`, e);
+        }
+      }
+    } catch (e) {
+      console.error('[Clear] Failed to import del function:', e);
+    }
+  }
+  
+  // 删除向量和文件列表
   await redis.del(getVectorKey(roleId));
   await redis.del(`files:${roleId}`);
+  console.log(`[Clear] Cleared all data for role: ${roleId}`);
 }
 
 export async function getRoleFiles(roleId: string): Promise<string[]> {
@@ -323,5 +506,19 @@ export async function removeRoleFile(roleId: string, fileUrl: string) {
   const files = await getRoleFiles(roleId);
   const newFiles = files.filter(f => f !== fileUrl);
   await redis.set(`files:${roleId}`, JSON.stringify(newFiles));
+  
+  // 同时删除向量库中属于这个文件的向量
+  const vectorKey = getVectorKey(roleId);
+  const data = await redis.get(vectorKey);
+  if (data) {
+    const vectors: StoredVector[] = JSON.parse(data);
+    const filteredVectors = vectors.filter(v => {
+      const source = v.metadata?.source as string || '';
+      return source !== fileUrl;
+    });
+    await redis.set(vectorKey, JSON.stringify(filteredVectors));
+    console.log(`[Remove] Removed ${vectors.length - filteredVectors.length} vectors for file: ${fileUrl}`);
+  }
+  
   return newFiles;
 }

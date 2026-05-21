@@ -75,15 +75,32 @@ export async function parseDocument(
   const textSplitter = getTextSplitter();
   const documents: ParsedDocument[] = [];
 
-  for (const page of pages) {
-    const chunks = await textSplitter.splitText(page);
+  // 对于Excel，保持按表格分割
+  if (isExcel) {
+    for (const page of pages) {
+      const chunks = await textSplitter.splitText(page);
+      for (let i = 0; i < chunks.length; i++) {
+        documents.push({
+          pageContent: chunks[i],
+          metadata: {
+            source: fileName,
+            chunkIndex: i,
+            type: 'excel',
+          },
+        });
+      }
+    }
+  } else {
+    // 对于其他文件，合并所有内容后统一切分
+    const fullContent = pages.join('\n\n');
+    const chunks = await textSplitter.splitText(fullContent);
     for (let i = 0; i < chunks.length; i++) {
       documents.push({
         pageContent: chunks[i],
         metadata: {
           source: fileName,
           chunkIndex: i,
-          type: isMD ? 'markdown' : isTXT ? 'text' : isPDF ? 'pdf' : isExcel ? 'excel' : 'word',
+          type: isMD ? 'markdown' : isTXT ? 'text' : isPDF ? 'pdf' : 'word',
         },
       });
     }

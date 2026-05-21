@@ -16,6 +16,7 @@ interface Persona {
 export default function AdminPage() {
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>('');
+  const [selectedPersonaDetail, setSelectedPersonaDetail] = useState<Persona | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -25,10 +26,20 @@ export default function AdminPage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
+  const [loadingPersonaDetail, setLoadingPersonaDetail] = useState(false);
 
   useEffect(() => {
     loadPersonas();
   }, []);
+
+  // 当选中角色时加载详情
+  useEffect(() => {
+    if (selectedPersonaId) {
+      loadPersonaDetail(selectedPersonaId);
+    } else {
+      setSelectedPersonaDetail(null);
+    }
+  }, [selectedPersonaId]);
 
   useEffect(() => {
     if (notification) {
@@ -54,6 +65,22 @@ export default function AdminPage() {
     }
   }
 
+  async function loadPersonaDetail(roleId: string) {
+    if (!roleId) return;
+    setLoadingPersonaDetail(true);
+    try {
+      const res = await fetch(`/api/admin?roleId=${roleId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedPersonaDetail(data);
+      }
+    } catch (error) {
+      console.error('Failed to load persona detail:', error);
+    } finally {
+      setLoadingPersonaDetail(false);
+    }
+  }
+
   function showNotification(type: 'success' | 'error', message: string) {
     setNotification({ type, message });
   }
@@ -76,7 +103,7 @@ export default function AdminPage() {
       if (res.ok) {
         showNotification('success', '上传成功！');
         setFile(null);
-        loadPersonas();
+        loadPersonaDetail(selectedPersonaId); // 刷新详情
       } else {
         const data = await res.json();
         showNotification('error', `上传失败: ${data.error}`);
@@ -100,7 +127,7 @@ export default function AdminPage() {
 
       if (res.ok) {
         showNotification('success', '文件已删除');
-        loadPersonas();
+        loadPersonaDetail(selectedPersonaId); // 刷新详情
       } else {
         const data = await res.json();
         showNotification('error', `删除失败: ${data.error}`);
@@ -121,7 +148,9 @@ export default function AdminPage() {
         method: 'DELETE',
       });
       showNotification('success', '操作成功');
-      loadPersonas();
+      if (selectedPersonaId === roleId) {
+        loadPersonaDetail(roleId); // 刷新详情
+      }
     } catch (error) {
       console.error('Clear error:', error);
       showNotification('error', '操作失败');
@@ -180,8 +209,6 @@ export default function AdminPage() {
     setEditForm({ name, description: '', systemPrompt: '', tone: '' });
     setShowEditModal(true);
   }
-
-  const selectedPersona = personas.find(p => p.id === selectedPersonaId);
 
   if (loading) {
     return (
@@ -277,32 +304,36 @@ export default function AdminPage() {
               </div>
             )}
 
-            {selectedPersona ? (
+            {loadingPersonaDetail ? (
+              <div className="flex items-center justify-center py-20">
+                <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : selectedPersonaDetail ? (
               <>
                 {/* 人设详情卡片 */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 mb-6">
                   <div className="flex items-start justify-between mb-6">
                     <div className="flex items-center gap-4">
                       <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-3xl ${
-                        selectedPersona.id === 'sales-assistant' ? 'bg-blue-100 text-blue-600' :
-                        selectedPersona.id === 'trainer' ? 'bg-purple-100 text-purple-600' :
-                        selectedPersona.id === 'customer-service' ? 'bg-amber-100 text-amber-600' :
-                        selectedPersona.id === 'tech-advisor' ? 'bg-slate-100 text-slate-600' :
+                        selectedPersonaDetail.id === 'sales-assistant' ? 'bg-blue-100 text-blue-600' :
+                        selectedPersonaDetail.id === 'trainer' ? 'bg-purple-100 text-purple-600' :
+                        selectedPersonaDetail.id === 'customer-service' ? 'bg-amber-100 text-amber-600' :
+                        selectedPersonaDetail.id === 'tech-advisor' ? 'bg-slate-100 text-slate-600' :
                         'bg-gradient-to-br from-indigo-100 to-purple-100 text-indigo-600'
                       }`}>
-                        {selectedPersona.id === 'sales-assistant' ? '🛍️' :
-                         selectedPersona.id === 'trainer' ? '📚' :
-                         selectedPersona.id === 'customer-service' ? '💬' :
-                         selectedPersona.id === 'tech-advisor' ? '⚙️' : '🎭'}
+                        {selectedPersonaDetail.id === 'sales-assistant' ? '🛍️' :
+                         selectedPersonaDetail.id === 'trainer' ? '📚' :
+                         selectedPersonaDetail.id === 'customer-service' ? '💬' :
+                         selectedPersonaDetail.id === 'tech-advisor' ? '⚙️' : '🎭'}
                       </div>
                       <div>
-                        <h2 className="text-2xl font-bold text-slate-800">{selectedPersona.name}</h2>
-                        <p className="text-slate-500 mt-1">{selectedPersona.description}</p>
+                        <h2 className="text-2xl font-bold text-slate-800">{selectedPersonaDetail.name}</h2>
+                        <p className="text-slate-500 mt-1">{selectedPersonaDetail.description}</p>
                       </div>
                     </div>
                     <div className="flex gap-2">
                       <button
-                        onClick={() => openEditModal(selectedPersona)}
+                        onClick={() => openEditModal(selectedPersonaDetail)}
                         className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl hover:from-blue-600 hover:to-indigo-600 transition-all duration-200 font-medium shadow-sm flex items-center gap-2"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -310,9 +341,9 @@ export default function AdminPage() {
                         </svg>
                         编辑
                       </button>
-                      {selectedPersona.isCustom && (
+                      {selectedPersonaDetail.isCustom && (
                         <button
-                          onClick={() => handleClear(selectedPersona.id, false)}
+                          onClick={() => handleClear(selectedPersonaDetail.id, false)}
                           className="px-4 py-2 bg-gradient-to-r from-red-500 to-rose-500 text-white rounded-xl hover:from-red-600 hover:to-rose-600 transition-all duration-200 font-medium shadow-sm flex items-center gap-2"
                         >
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -322,7 +353,7 @@ export default function AdminPage() {
                         </button>
                       )}
                       <button
-                        onClick={() => handleClear(selectedPersona.id, true)}
+                        onClick={() => handleClear(selectedPersonaDetail.id, true)}
                         className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-all duration-200 font-medium flex items-center gap-2"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -336,30 +367,30 @@ export default function AdminPage() {
                   <div className="grid grid-cols-3 gap-4 mb-6">
                     <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-100">
                       <div className="text-sm text-slate-600 mb-1">文件数量</div>
-                      <div className="text-2xl font-bold text-blue-600">{selectedPersona.filesCount || 0}</div>
+                      <div className="text-2xl font-bold text-blue-600">{selectedPersonaDetail.files?.length || 0}</div>
                     </div>
                     <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-4 border border-purple-100">
                       <div className="text-sm text-slate-600 mb-1">语气风格</div>
-                      <div className="text-lg font-semibold text-purple-600">{selectedPersona.tone}</div>
+                      <div className="text-lg font-semibold text-purple-600">{selectedPersonaDetail.tone}</div>
                     </div>
                     <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl p-4 border border-amber-100">
                       <div className="text-sm text-slate-600 mb-1">类型</div>
                       <div className="text-lg font-semibold text-amber-600">
-                        {selectedPersona.isCustom ? '自定义' : '系统默认'}
+                        {selectedPersonaDetail.isCustom ? '自定义' : '系统默认'}
                       </div>
                     </div>
                   </div>
 
-                  {selectedPersona.files && selectedPersona.files.length > 0 && (
+                  {selectedPersonaDetail.files && selectedPersonaDetail.files.length > 0 && (
                     <div className="mb-6 bg-white rounded-xl border border-slate-200 overflow-hidden">
                       <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
                         <svg className="w-4 h-4 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
-                        <span className="text-sm font-medium text-slate-700">已上传文件 ({selectedPersona.files.length})</span>
+                        <span className="text-sm font-medium text-slate-700">已上传文件 ({selectedPersonaDetail.files.length})</span>
                       </div>
                       <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
-                        {Array.isArray(selectedPersona.files) ? selectedPersona.files.map((f: string, i: number) => (
+                        {Array.isArray(selectedPersonaDetail.files) ? selectedPersonaDetail.files.map((f: string, i: number) => (
                           <div key={i} className="px-4 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors group">
                             <div className="flex items-center gap-3 min-w-0 flex-1">
                               <svg className="w-5 h-5 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -401,7 +432,7 @@ export default function AdminPage() {
                     </h3>
                     <div className="bg-slate-50 rounded-xl p-4 border border-slate-200">
                       <pre className="text-sm text-slate-700 whitespace-pre-wrap font-mono">
-                        {selectedPersona.systemPrompt}
+                        {selectedPersonaDetail.systemPrompt}
                       </pre>
                     </div>
                   </div>
@@ -439,7 +470,7 @@ export default function AdminPage() {
                               {file ? file.name : '点击选择 PDF/MD/TXT 文件'}
                             </span>
                             <span className="text-xs text-slate-400 mt-1 block">
-                              将上传到「{selectedPersona.name}」的知识库
+                              将上传到「{selectedPersonaDetail.name}」的知识库
                             </span>
                           </div>
                         </label>
