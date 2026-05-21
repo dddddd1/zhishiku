@@ -1,0 +1,32 @@
+{
+  "name": "multi-persona-rag",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@langchain/core": "0.2.31",
+    "@langchain/openai": "0.2.8",
+    "@vercel/blob": "0.23.3",
+    "@vercel/kv": "1.0.1",
+    "langchain": "0.2.16",
+    "next": "14.2.5",
+    "pdf-parse": "1.1.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.0",
+    "@types/pdf-parse": "1.1.4",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.4.49",
+    "tailwindcss": "3.4.15",
+    "typescript": "5.5.4"
+  }
+}
