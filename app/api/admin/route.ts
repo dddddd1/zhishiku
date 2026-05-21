@@ -32,19 +32,13 @@ async function getAllPersonasWithStats() {
     ...Object.values(custom).filter(p => !DEFAULT_PERSONAS[p.id]),
   ];
 
+  // 优化: 并行获取文件列表,但不执行耗时的向量搜索
   const stats = await Promise.all(
     allPersonas.map(async (p) => {
       const files = await getRoleFiles(p.id);
-      let vectorCount = 0;
-      try {
-        const docs = await similaritySearch(p.id, '__meta__', 1);
-        vectorCount = docs.length > 0 ? -1 : 0;
-      } catch {
-        vectorCount = 0;
-      }
       return {
         ...p,
-        vectorCount,
+        vectorCount: null, // 不在列表中显示向量数量,避免性能问题
         filesCount: files.length,
         files,
         isCustom: !!custom[p.id],
